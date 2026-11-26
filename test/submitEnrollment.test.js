@@ -4,26 +4,24 @@ import assert from "node:assert/strict";
 import { submitEnrollment } from "../src/submitEnrollment.js";
 import { createFixture } from "./fixtures/fixtures.js";
 
+const request = (idempotencyKey) => ({
+  studentId: "MHS001",
+  classId: "KLS001",
+  term: "2026-GANJIL",
+  idempotencyKey,
+});
+
 // TEST BASELINE
 test("UT-BASELINE: key tidak valid ditolak tanpa memanggil port", async () => {
   const { ports, state, calls } = createFixture();
 
-  const result = await submitEnrollment(
-    {
-      studentId: "MHS001",
-      classId: "KLS001",
-      term: "2026-GANJIL",
-      idempotencyKey: "123456789012345",
-    },
-    ports,
-  );
+  const result = await submitEnrollment(request("123456789012345"), ports);
 
   assert.deepEqual(result, { code: "INVALID_KEY" });
   assert.equal(state.seats.get("KLS001"), 1);
   assert.equal(state.enrollments.length, 0);
   assert.equal(state.claims.size, 0);
   assert.equal(state.completedKeys.size, 0);
-
   assert.deepEqual(calls, {
     find: 0,
     reserve: 0,
@@ -41,25 +39,16 @@ test("UT01: key baru dan kursi tersedia menghasilkan satu enrollment", async () 
     initialSeats: 1,
   });
 
-  const request = {
-    studentId: "MHS001",
-    classId: "KLS001",
-    term: "2026-GANJIL",
-    idempotencyKey: "abcdefghijklmnop",
-  };
-
-  const result = await submitEnrollment(request, ports);
+  const result = await submitEnrollment(request("abcdefghijklmnop"), ports);
 
   assert.deepEqual(result, {
     code: "OK",
     enrollmentId: "ENR-1",
   });
-
   assert.equal(state.seats.get("KLS001"), 0);
   assert.equal(state.enrollments.length, 1);
   assert.equal(state.completedKeys.size, 1);
   assert.equal(state.claims.size, 0);
-
   assert.deepEqual(calls, {
     find: 1,
     reserve: 1,
@@ -77,27 +66,20 @@ test("UT02: replay key dan payload sama mengembalikan hasil pertama tanpa efek t
     initialSeats: 2,
   });
 
-  const request = {
-    studentId: "MHS001",
-    classId: "KLS001",
-    term: "2026-GANJIL",
-    idempotencyKey: "abcdefghijklmnop",
-  };
+  const data = request("abcdefghijklmnop");
 
-  const firstResult = await submitEnrollment(request, ports);
-
+  const firstResult = await submitEnrollment(data, ports);
   const seatsAfterFirst = state.seats.get("KLS001");
   const enrollmentsAfterFirst = state.enrollments.length;
   const completedKeysAfterFirst = state.completedKeys.size;
 
-  const replayResult = await submitEnrollment(request, ports);
+  const replayResult = await submitEnrollment(data, ports);
 
   assert.deepEqual(replayResult, firstResult);
   assert.equal(state.seats.get("KLS001"), seatsAfterFirst);
   assert.equal(state.enrollments.length, enrollmentsAfterFirst);
   assert.equal(state.completedKeys.size, completedKeysAfterFirst);
   assert.equal(state.claims.size, 0);
-
   assert.equal(calls.tryReserve, 1);
   assert.equal(calls.save, 1);
   assert.equal(calls.complete, 1);
@@ -111,41 +93,30 @@ test("UT03: key sama dengan classId berbeda menghasilkan conflict tanpa mengubah
 
   state.seats.set("KLS002", 3);
 
-  const firstRequest = {
-    studentId: "MHS001",
-    classId: "KLS001",
-    term: "2026-GANJIL",
-    idempotencyKey: "abcdefghijklmnop",
-  };
-
-  const conflictingRequest = {
-    studentId: "MHS001",
-    classId: "KLS002",
-    term: "2026-GANJIL",
-    idempotencyKey: "abcdefghijklmnop",
-  };
-
-  const firstResult = await submitEnrollment(firstRequest, ports);
+  const firstResult = await submitEnrollment(request("abcdefghijklmnop"), ports);
 
   const firstClassSeats = state.seats.get("KLS001");
   const secondClassSeats = state.seats.get("KLS002");
   const enrollmentCount = state.enrollments.length;
   const completedKeyCount = state.completedKeys.size;
 
-  const conflictResult = await submitEnrollment(conflictingRequest, ports);
+  const conflictResult = await submitEnrollment(
+    {
+      ...request("abcdefghijklmnop"),
+      classId: "KLS002",
+    },
+    ports,
+  );
 
   assert.deepEqual(conflictResult, {
     code: "IDEMPOTENCY_CONFLICT",
   });
-
   assert.equal(state.enrollments[0].enrollmentId, firstResult.enrollmentId);
-
   assert.equal(state.seats.get("KLS001"), firstClassSeats);
   assert.equal(state.seats.get("KLS002"), secondClassSeats);
   assert.equal(state.enrollments.length, enrollmentCount);
   assert.equal(state.completedKeys.size, completedKeyCount);
   assert.equal(state.claims.size, 0);
-
   assert.equal(calls.tryReserve, 1);
   assert.equal(calls.save, 1);
   assert.equal(calls.complete, 1);
@@ -158,24 +129,13 @@ test("UT04: kelas penuh tidak membuat enrollment dan tidak mengurangi kursi", as
     initialSeats: 0,
   });
 
-  const request = {
-    studentId: "MHS001",
-    classId: "KLS001",
-    term: "2026-GANJIL",
-    idempotencyKey: "abcdefghijklmnop",
-  };
+  const result = await submitEnrollment(request("abcdefghijklmnop"), ports);
 
-  const result = await submitEnrollment(request, ports);
-
-  assert.deepEqual(result, {
-    code: "CLASS_FULL",
-  });
-
+  assert.deepEqual(result, { code: "CLASS_FULL" });
   assert.equal(state.seats.get("KLS001"), 0);
   assert.equal(state.enrollments.length, 0);
   assert.equal(state.completedKeys.size, 0);
   assert.equal(state.claims.size, 0);
-
   assert.deepEqual(calls, {
     find: 1,
     reserve: 1,
@@ -194,24 +154,13 @@ test("UT05: save gagal melepaskan kursi dan membersihkan klaim key", async () =>
     saveShouldFail: true,
   });
 
-  const request = {
-    studentId: "MHS001",
-    classId: "KLS001",
-    term: "2026-GANJIL",
-    idempotencyKey: "abcdefghijklmnop",
-  };
+  const result = await submitEnrollment(request("abcdefghijklmnop"), ports);
 
-  const result = await submitEnrollment(request, ports);
-
-  assert.deepEqual(result, {
-    code: "SAVE_FAILED",
-  });
-
+  assert.deepEqual(result, { code: "SAVE_FAILED" });
   assert.equal(state.seats.get("KLS001"), 1);
   assert.equal(state.enrollments.length, 0);
   assert.equal(state.claims.size, 0);
   assert.equal(state.completedKeys.size, 0);
-
   assert.deepEqual(calls, {
     find: 1,
     reserve: 1,
@@ -230,42 +179,28 @@ test("UT06: retry setelah save gagal berhasil tanpa kehilangan atau menggandakan
     saveShouldFail: true,
   });
 
-  const request = {
-    studentId: "MHS001",
-    classId: "KLS001",
-    term: "2026-GANJIL",
-    idempotencyKey: "abcdefghijklmnop",
-  };
+  const data = request("abcdefghijklmnop");
 
-  // Percobaan pertama: penyimpanan gagal
-  const firstResult = await submitEnrollment(request, ports);
+  const firstResult = await submitEnrollment(data, ports);
 
-  assert.deepEqual(firstResult, {
-    code: "SAVE_FAILED",
-  });
-
+  assert.deepEqual(firstResult, { code: "SAVE_FAILED" });
   assert.equal(state.seats.get("KLS001"), 1);
   assert.equal(state.enrollments.length, 0);
   assert.equal(state.claims.size, 0);
   assert.equal(state.completedKeys.size, 0);
 
-  // Simulasi penyimpanan kembali normal
   state.saveShouldFail = false;
 
-  // Percobaan kedua menggunakan request dan key yang sama
-  const retryResult = await submitEnrollment(request, ports);
+  const retryResult = await submitEnrollment(data, ports);
 
   assert.deepEqual(retryResult, {
     code: "OK",
     enrollmentId: "ENR-1",
   });
-
-  // Memastikan hasil akhir tidak kehilangan atau menggandakan data
   assert.equal(state.seats.get("KLS001"), 0);
   assert.equal(state.enrollments.length, 1);
   assert.equal(state.completedKeys.size, 1);
   assert.equal(state.claims.size, 0);
-
   assert.deepEqual(calls, {
     find: 2,
     reserve: 2,
@@ -274,5 +209,89 @@ test("UT06: retry setelah save gagal berhasil tanpa kehilangan atau menggandakan
     tryReserve: 2,
     save: 2,
     release: 1,
+  });
+});
+
+// UT07: Key terlalu pendek
+test("UT07: key 15 karakter ditolak tanpa perubahan data", async () => {
+  const { ports, state, calls } = createFixture();
+
+  const result = await submitEnrollment(request("123456789012345"), ports);
+
+  assert.deepEqual(result, { code: "INVALID_KEY" });
+  assert.equal(state.seats.get("KLS001"), 1);
+  assert.equal(state.enrollments.length, 0);
+  assert.equal(state.claims.size, 0);
+  assert.equal(state.completedKeys.size, 0);
+  assert.deepEqual(calls, {
+    find: 0,
+    reserve: 0,
+    complete: 0,
+    abort: 0,
+    tryReserve: 0,
+    save: 0,
+    release: 0,
+  });
+});
+
+// UT08: Key tepat 16 karakter
+test("UT08: key 16 karakter diterima dan pendaftaran berhasil", async () => {
+  const { ports, state } = createFixture({
+    initialSeats: 1,
+  });
+
+  const key = "a".repeat(16);
+  const result = await submitEnrollment(request(key), ports);
+
+  assert.equal(key.length, 16);
+  assert.deepEqual(result, {
+    code: "OK",
+    enrollmentId: "ENR-1",
+  });
+  assert.equal(state.seats.get("KLS001"), 0);
+  assert.equal(state.enrollments.length, 1);
+  assert.equal(state.completedKeys.size, 1);
+});
+
+// UT09: Key tepat 64 karakter
+test("UT09: key 64 karakter diterima dan pendaftaran berhasil", async () => {
+  const { ports, state } = createFixture({
+    initialSeats: 1,
+  });
+
+  const key = "a".repeat(64);
+  const result = await submitEnrollment(request(key), ports);
+
+  assert.equal(key.length, 64);
+  assert.deepEqual(result, {
+    code: "OK",
+    enrollmentId: "ENR-1",
+  });
+  assert.equal(state.seats.get("KLS001"), 0);
+  assert.equal(state.enrollments.length, 1);
+  assert.equal(state.completedKeys.size, 1);
+});
+
+// UT10: Key terlalu panjang
+test("UT10: key 65 karakter ditolak tanpa perubahan data", async () => {
+  const { ports, state, calls } = createFixture();
+
+  const key = "a".repeat(65);
+  const result = await submitEnrollment(request(key), ports);
+
+  assert.equal(key.length, 65);
+  assert.deepEqual(result, { code: "INVALID_KEY" });
+  assert.equal(state.seats.get("KLS001"), 1);
+  assert.equal(state.enrollments.length, 0);
+  assert.equal(state.claims.size, 0);
+  assert.equal(state.completedKeys.size, 0);
+  assert.deepEqual(calls, {
+    find: 0,
+    reserve: 0,
+    complete: 0,
+    abort: 0,
+    tryReserve: 0,
+    save: 0,
+    release: 0,
   });
 });
