@@ -7,35 +7,44 @@
  * U8-R02:
  * Scope key menggunakan studentId dan term.
  * Fingerprint membandingkan studentId, classId, dan term.
+ *
+ * U8-R03:
+ * Key baru dan kursi tersedia menghasilkan enrollment.
+ *
+ * U8-R04:
+ * Replay dengan fingerprint sama mengembalikan hasil pertama.
  */
 export async function submitEnrollment({ studentId, classId, term, idempotencyKey }, ports) {
-  // Validasi panjang key
+  // 1. Validasi panjang key
   if (typeof idempotencyKey !== "string" || idempotencyKey.length < 16 || idempotencyKey.length > 64) {
     return { code: "INVALID_KEY" };
   }
 
-  // Membuat scope dan fingerprint
+  // 2. Membuat scope dan fingerprint
   const scope = JSON.stringify([studentId, term]);
 
   const fingerprint = JSON.stringify([studentId, classId, term]);
 
-  // Memeriksa key yang sudah tersimpan
+  // 3. Memeriksa key yang sudah pernah digunakan
   const existing = await ports.idempotency.find(scope, idempotencyKey);
 
-  // Penanganan sementara untuk key yang sudah digunakan.
-  // Perilaku replay akan dikembangkan melalui test berikutnya.
+  // 4. Jika key sudah ada, periksa fingerprint
   if (existing) {
+    if (existing.fingerprint === fingerprint) {
+      return existing.result;
+    }
+
     return { code: "IDEMPOTENCY_CONFLICT" };
   }
 
-  // Membuat klaim key sementara
+  // 5. Membuat klaim key sementara
   const token = await ports.idempotency.reserve(scope, idempotencyKey, fingerprint);
 
   if (!token) {
     return { code: "IDEMPOTENCY_CONFLICT" };
   }
 
-  // Memesan satu kursi
+  // 6. Memesan satu kursi
   const reservation = await ports.seat.tryReserve(classId);
 
   if (!reservation) {
@@ -43,20 +52,22 @@ export async function submitEnrollment({ studentId, classId, term, idempotencyKe
     return { code: "CLASS_FULL" };
   }
 
-  // Menyimpan enrollment
+  // 7. Menyimpan enrollment
   const enrollment = await ports.enrollment.save({
     studentId,
     classId,
     term,
   });
 
-  // Menyimpan hasil akhir untuk kebutuhan replay
+  // 8. Menyiapkan hasil pendaftaran
   const result = {
     code: "OK",
     enrollmentId: enrollment.enrollmentId,
   };
 
+  // 9. Menyimpan hasil akhir untuk kebutuhan replay
   await ports.idempotency.complete(token, result);
 
+  // 10. Mengembalikan hasil
   return result;
 }
