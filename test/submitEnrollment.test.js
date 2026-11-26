@@ -87,3 +87,46 @@ test("UT01: key baru dan kursi tersedia menghasilkan satu enrollment", async () 
     release: 0,
   });
 });
+
+// ==========================================
+// UT02: REPLAY KEY DAN PAYLOAD SAMA
+// ==========================================
+
+test("UT02: replay key dan payload sama mengembalikan hasil pertama tanpa efek tambahan", async () => {
+  // Arrange
+  const { ports, state, calls } = createFixture({
+    initialSeats: 2,
+  });
+
+  const request = {
+    studentId: "MHS001",
+    classId: "KLS001",
+    term: "2026-GANJIL",
+    idempotencyKey: "abcdefghijklmnop",
+  };
+
+  // Act: pendaftaran pertama
+  const firstResult = await submitEnrollment(request, ports);
+
+  // Simpan kondisi setelah pendaftaran pertama
+  const seatsAfterFirst = state.seats.get("KLS001");
+  const enrollmentsAfterFirst = state.enrollments.length;
+  const completedKeysAfterFirst = state.completedKeys.size;
+
+  // Act: permintaan yang sama dikirim kembali
+  const replayResult = await submitEnrollment(request, ports);
+
+  // Assert: hasil replay harus sama dengan hasil pertama
+  assert.deepEqual(replayResult, firstResult);
+
+  // Assert: tidak ada perubahan data tambahan
+  assert.equal(state.seats.get("KLS001"), seatsAfterFirst);
+  assert.equal(state.enrollments.length, enrollmentsAfterFirst);
+  assert.equal(state.completedKeys.size, completedKeysAfterFirst);
+  assert.equal(state.claims.size, 0);
+
+  // Assert: hanya satu reservasi dan satu penyimpanan enrollment
+  assert.equal(calls.tryReserve, 1);
+  assert.equal(calls.save, 1);
+  assert.equal(calls.complete, 1);
+});
