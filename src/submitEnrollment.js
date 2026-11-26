@@ -13,6 +13,15 @@
  *
  * U8-R04:
  * Replay dengan fingerprint sama mengembalikan hasil pertama.
+ *
+ * U8-R05:
+ * Payload berbeda dengan scope dan key sama menghasilkan conflict.
+ *
+ * U8-R06:
+ * Kelas penuh tidak membuat enrollment.
+ *
+ * U8-R07:
+ * Save gagal menyebabkan kursi dilepas dan klaim key dibersihkan.
  */
 export async function submitEnrollment({ studentId, classId, term, idempotencyKey }, ports) {
   // 1. Validasi panjang key
@@ -25,10 +34,10 @@ export async function submitEnrollment({ studentId, classId, term, idempotencyKe
 
   const fingerprint = JSON.stringify([studentId, classId, term]);
 
-  // 3. Memeriksa key yang sudah pernah digunakan
+  // 3. Memeriksa key yang sudah digunakan
   const existing = await ports.idempotency.find(scope, idempotencyKey);
 
-  // 4. Jika key sudah ada, periksa fingerprint
+  // 4. Menangani replay dan konflik payload
   if (existing) {
     if (existing.fingerprint === fingerprint) {
       return existing.result;
@@ -44,7 +53,7 @@ export async function submitEnrollment({ studentId, classId, term, idempotencyKe
     return { code: "IDEMPOTENCY_CONFLICT" };
   }
 
-  // 6. Memesan satu kursi
+  // 6. Memesan kursi
   const reservation = await ports.seat.tryReserve(classId);
 
   if (!reservation) {
@@ -53,11 +62,23 @@ export async function submitEnrollment({ studentId, classId, term, idempotencyKe
   }
 
   // 7. Menyimpan enrollment
-  const enrollment = await ports.enrollment.save({
-    studentId,
-    classId,
-    term,
-  });
+  let enrollment;
+
+  try {
+    enrollment = await ports.enrollment.save({
+      studentId,
+      classId,
+      term,
+    });
+  } catch (error) {
+    // Jika save gagal, kembalikan kursi
+    await ports.seat.release(reservation);
+
+    // Hapus klaim key sementara
+    await ports.idempotency.abort(token);
+
+    return { code: "SAVE_FAILED" };
+  }
 
   // 8. Menyiapkan hasil pendaftaran
   const result = {
