@@ -4,10 +4,7 @@ import assert from "node:assert/strict";
 import { submitEnrollment } from "../src/submitEnrollment.js";
 import { createFixture } from "./fixtures/fixtures.js";
 
-// ==========================================
 // TEST BASELINE
-// ==========================================
-
 test("UT-BASELINE: key tidak valid ditolak tanpa memanggil port", async () => {
   const { ports, state, calls } = createFixture();
 
@@ -22,7 +19,6 @@ test("UT-BASELINE: key tidak valid ditolak tanpa memanggil port", async () => {
   );
 
   assert.deepEqual(result, { code: "INVALID_KEY" });
-
   assert.equal(state.seats.get("KLS001"), 1);
   assert.equal(state.enrollments.length, 0);
   assert.equal(state.claims.size, 0);
@@ -39,10 +35,7 @@ test("UT-BASELINE: key tidak valid ditolak tanpa memanggil port", async () => {
   });
 });
 
-// ==========================================
-// UT01: KEY BARU DAN KURSI TERSEDIA
-// ==========================================
-
+// UT01: New enrollment
 test("UT01: key baru dan kursi tersedia menghasilkan satu enrollment", async () => {
   const { ports, state, calls } = createFixture({
     initialSeats: 1,
@@ -78,10 +71,7 @@ test("UT01: key baru dan kursi tersedia menghasilkan satu enrollment", async () 
   });
 });
 
-// ==========================================
-// UT02: REPLAY KEY DAN PAYLOAD SAMA
-// ==========================================
-
+// UT02: Replay
 test("UT02: replay key dan payload sama mengembalikan hasil pertama tanpa efek tambahan", async () => {
   const { ports, state, calls } = createFixture({
     initialSeats: 2,
@@ -103,7 +93,6 @@ test("UT02: replay key dan payload sama mengembalikan hasil pertama tanpa efek t
   const replayResult = await submitEnrollment(request, ports);
 
   assert.deepEqual(replayResult, firstResult);
-
   assert.equal(state.seats.get("KLS001"), seatsAfterFirst);
   assert.equal(state.enrollments.length, enrollmentsAfterFirst);
   assert.equal(state.completedKeys.size, completedKeysAfterFirst);
@@ -114,10 +103,7 @@ test("UT02: replay key dan payload sama mengembalikan hasil pertama tanpa efek t
   assert.equal(calls.complete, 1);
 });
 
-// ==========================================
-// UT03: KONFLIK PAYLOAD
-// ==========================================
-
+// UT03: Payload conflict
 test("UT03: key sama dengan classId berbeda menghasilkan conflict tanpa mengubah data pertama", async () => {
   const { ports, state, calls } = createFixture({
     initialSeats: 2,
@@ -166,10 +152,7 @@ test("UT03: key sama dengan classId berbeda menghasilkan conflict tanpa mengubah
   assert.equal(calls.release, 0);
 });
 
-// ==========================================
-// UT04: KELAS PENUH
-// ==========================================
-
+// UT04: Full class
 test("UT04: kelas penuh tidak membuat enrollment dan tidak mengurangi kursi", async () => {
   const { ports, state, calls } = createFixture({
     initialSeats: 0,
@@ -204,10 +187,7 @@ test("UT04: kelas penuh tidak membuat enrollment dan tidak mengurangi kursi", as
   });
 });
 
-// ==========================================
-// UT05: SAVE GAGAL
-// ==========================================
-
+// UT05: Save failure
 test("UT05: save gagal melepaskan kursi dan membersihkan klaim key", async () => {
   const { ports, state, calls } = createFixture({
     initialSeats: 1,
@@ -239,6 +219,60 @@ test("UT05: save gagal melepaskan kursi dan membersihkan klaim key", async () =>
     abort: 1,
     tryReserve: 1,
     save: 1,
+    release: 1,
+  });
+});
+
+// UT06: Retry after save failure
+test("UT06: retry setelah save gagal berhasil tanpa kehilangan atau menggandakan kursi", async () => {
+  const { ports, state, calls } = createFixture({
+    initialSeats: 1,
+    saveShouldFail: true,
+  });
+
+  const request = {
+    studentId: "MHS001",
+    classId: "KLS001",
+    term: "2026-GANJIL",
+    idempotencyKey: "abcdefghijklmnop",
+  };
+
+  // Percobaan pertama: penyimpanan gagal
+  const firstResult = await submitEnrollment(request, ports);
+
+  assert.deepEqual(firstResult, {
+    code: "SAVE_FAILED",
+  });
+
+  assert.equal(state.seats.get("KLS001"), 1);
+  assert.equal(state.enrollments.length, 0);
+  assert.equal(state.claims.size, 0);
+  assert.equal(state.completedKeys.size, 0);
+
+  // Simulasi penyimpanan kembali normal
+  state.saveShouldFail = false;
+
+  // Percobaan kedua menggunakan request dan key yang sama
+  const retryResult = await submitEnrollment(request, ports);
+
+  assert.deepEqual(retryResult, {
+    code: "OK",
+    enrollmentId: "ENR-1",
+  });
+
+  // Memastikan hasil akhir tidak kehilangan atau menggandakan data
+  assert.equal(state.seats.get("KLS001"), 0);
+  assert.equal(state.enrollments.length, 1);
+  assert.equal(state.completedKeys.size, 1);
+  assert.equal(state.claims.size, 0);
+
+  assert.deepEqual(calls, {
+    find: 2,
+    reserve: 2,
+    complete: 1,
+    abort: 1,
+    tryReserve: 2,
+    save: 2,
     release: 1,
   });
 });
