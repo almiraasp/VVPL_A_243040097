@@ -1,0 +1,9 @@
+{
+  "name": "VVPL_A_243040097",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
