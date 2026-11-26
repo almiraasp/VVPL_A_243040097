@@ -295,3 +295,110 @@ test("UT10: key 65 karakter ditolak tanpa perubahan data", async () => {
     release: 0,
   });
 });
+
+// UT11: Same key with different scopes
+test("UT11: key sama pada mahasiswa atau semester berbeda diproses secara terpisah", async () => {
+  const { ports, state, calls } = createFixture({
+    initialSeats: 3,
+  });
+
+  const firstRequest = {
+    studentId: "MHS001",
+    classId: "KLS001",
+    term: "2026-GANJIL",
+    idempotencyKey: "abcdefghijklmnop",
+  };
+
+  const secondRequest = {
+    studentId: "MHS001",
+    classId: "KLS001",
+    term: "2026-GENAP",
+    idempotencyKey: "abcdefghijklmnop",
+  };
+
+  const thirdRequest = {
+    studentId: "MHS002",
+    classId: "KLS001",
+    term: "2026-GANJIL",
+    idempotencyKey: "abcdefghijklmnop",
+  };
+
+  const firstResult = await submitEnrollment(firstRequest, ports);
+  const secondResult = await submitEnrollment(secondRequest, ports);
+  const thirdResult = await submitEnrollment(thirdRequest, ports);
+
+  assert.deepEqual(firstResult, {
+    code: "OK",
+    enrollmentId: "ENR-1",
+  });
+
+  assert.deepEqual(secondResult, {
+    code: "OK",
+    enrollmentId: "ENR-2",
+  });
+
+  assert.deepEqual(thirdResult, {
+    code: "OK",
+    enrollmentId: "ENR-3",
+  });
+
+  assert.equal(state.seats.get("KLS001"), 0);
+  assert.equal(state.enrollments.length, 3);
+  assert.equal(state.completedKeys.size, 3);
+  assert.equal(state.claims.size, 0);
+
+  assert.deepEqual(calls, {
+    find: 3,
+    reserve: 3,
+    complete: 3,
+    abort: 0,
+    tryReserve: 3,
+    save: 3,
+    release: 0,
+  });
+});
+
+// UT12: Replay when class is already full
+test("UT12: replay tetap mengembalikan hasil pertama meskipun kursi sudah penuh", async () => {
+  const { ports, state, calls } = createFixture({
+    initialSeats: 1,
+  });
+
+  const request = {
+    studentId: "MHS001",
+    classId: "KLS001",
+    term: "2026-GANJIL",
+    idempotencyKey: "abcdefghijklmnop",
+  };
+
+  // Pendaftaran pertama berhasil dan menghabiskan kursi
+  const firstResult = await submitEnrollment(request, ports);
+
+  assert.deepEqual(firstResult, {
+    code: "OK",
+    enrollmentId: "ENR-1",
+  });
+
+  assert.equal(state.seats.get("KLS001"), 0);
+
+  // Replay ketika kelas sudah penuh
+  const replayResult = await submitEnrollment(request, ports);
+
+  assert.deepEqual(replayResult, firstResult);
+
+  // Memastikan tidak ada proses pendaftaran tambahan
+  assert.equal(state.seats.get("KLS001"), 0);
+  assert.equal(state.enrollments.length, 1);
+  assert.equal(state.completedKeys.size, 1);
+  assert.equal(state.claims.size, 0);
+
+  assert.deepEqual(calls, {
+    find: 2,
+    reserve: 1,
+    complete: 1,
+    abort: 0,
+    tryReserve: 1,
+    save: 1,
+    release: 0,
+  });
+});
